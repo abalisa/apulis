@@ -46,7 +46,7 @@ export async function GET(request: Request) {
             uploaded: doodFile.uploaded,
             last_view: doodFile.last_view,
             canplay: doodFile.canplay,
-            protected_dl: doodFile.protected_dl,
+            protected_dl:  `https://doodstream.com/d/${doodFile.filecode}`,
             single_img: doodFile.single_img,
             title: processTitle(doodFile.title),
             views: doodFile.views,
