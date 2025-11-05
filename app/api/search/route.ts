@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   const query = searchParams.get("q")
   // Set default page and per_page values if they are not provided
   const page = searchParams.get("page") || "1"
-  const perPage = searchParams.get("per_page") || "100"
+  const perPage = searchParams.get("per_page") || "200"
 
   const queryValidation = validateSearchQuery(query || "")
   if (!queryValidation.isValid) {
