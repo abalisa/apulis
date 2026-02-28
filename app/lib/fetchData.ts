@@ -29,6 +29,7 @@ const BASE_URL = "https://api.lulustream.com/api/file/list"
 const DOOD_API_KEY = "112623ifbcbltzajwjrpjx"
 const DOOD_BASE_URL = "https://doodapi.com/api"
 const DOOD_SEARCH_URL = "https://doodapi.com/api"
+const LULU_INFO_URL = "https://api.lulustream.com/api/file/info" // Direct file info endpoint
 
 import { cacheManager, CACHE_TTL } from "./cacheManager"
 
@@ -316,6 +317,46 @@ export async function fetchDoodApiResults(searchTerm: string): Promise<any[]> {
     [],
     {
       maxAge: CACHE_TTL.DOOD_SEARCH * 1000,
+      staleWhileRevalidate: true,
+    },
+  )
+}
+
+export async function fetchLuluFileByCode(fileCode: string): Promise<VideoItem | null> {
+  const cacheKey = cacheManager.generateCacheKey("lulu_file_info", { fileCode })
+
+  return cacheManager.getWithFallback(
+    cacheKey,
+    async () => {
+      try {
+        // Try direct API endpoint for file info
+        const response = await fetch(
+          `${LULU_INFO_URL}?key=${API_KEY}&file_code=${fileCode}`,
+        )
+        const data = await response.json()
+
+        if (data.status === 200 && data.result?.length > 0) {
+          return normalizeLuluItem(data.result[0])
+        }
+
+        // Fallback: search in cached data (only if cache exists)
+        const cachedItems = cacheManager.getMemory<VideoItem[]>(
+          cacheManager.generateCacheKey("lulustream_all_data"),
+        )
+        if (cachedItems) {
+          const found = cachedItems.find((item) => item.file_code === fileCode)
+          if (found) return found
+        }
+
+        return null
+      } catch (error) {
+        console.error(`Error fetching file info for ${fileCode}:`, error)
+        return null
+      }
+    },
+    null,
+    {
+      maxAge: CACHE_TTL.FILE_INFO * 1000,
       staleWhileRevalidate: true,
     },
   )
