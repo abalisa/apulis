@@ -1,3 +1,7 @@
+// Cache untuk cleanTitle results dengan LRU eviction
+const titleCache = new Map<string, string>()
+const MAX_TITLE_CACHE = 5000
+
 const randomWords = [
   "Simontok",
   "Bokep31",
@@ -103,6 +107,11 @@ const randomWords = [
 ]
 
 function cleanTitle(title: string): string {
+  // Check cache dulu untuk avoid repeated processing
+  if (titleCache.has(title)) {
+    return titleCache.get(title)!
+  }
+
   // Pisahkan PascalCase dengan menambahkan spasi sebelum huruf kapital
   let cleanedTitle = title.replace(/([a-z])([A-Z])/g, "$1 $2")
 
@@ -127,18 +136,25 @@ function cleanTitle(title: string): string {
 
   // Tambahkan kata acak hingga jumlah kata mencapai 10
   if (words.length > 0 && words.length < 10) {
-    while (words.length < 10) {
-      const randomIndex = Math.floor(Math.random() * randomWords.length)
-      const randomWord = randomWords[randomIndex]
+    const wordsSet = new Set(words.map((w) => w.toLowerCase()))
+    const availableWords = randomWords.filter((w) => !wordsSet.has(w.toLowerCase()))
 
-      // Pastikan kata acak tidak duplikat
-      if (!words.includes(randomWord)) {
-        words.push(randomWord)
-      }
+    let needMore = 10 - words.length
+    for (let i = 0; i < needMore && availableWords.length > 0; i++) {
+      const randomIndex = Math.floor(Math.random() * availableWords.length)
+      words.push(availableWords[randomIndex])
+      availableWords.splice(randomIndex, 1)
     }
 
     cleanedTitle = words.join(" ")
   }
+
+  // Store in cache with LRU eviction
+  if (titleCache.size >= MAX_TITLE_CACHE) {
+    const firstKey = titleCache.keys().next().value
+    if (firstKey) titleCache.delete(firstKey)
+  }
+  titleCache.set(title, cleanedTitle)
 
   return cleanedTitle
 }

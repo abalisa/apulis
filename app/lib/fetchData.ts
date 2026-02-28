@@ -127,46 +127,79 @@ const normalizeLuluItem = (item: any): VideoItem => {
   }
 }
 
-async function fetchAllLuluData(): Promise<VideoItem[]> {
-  let allItems: VideoItem[] = []
-  let page = 1
-  const perPage = 1000 // Sesuaikan dengan batas maksimal API
-  let hasMore = true
-  let lastSuccessfulPage = 0
-  let hasPartialData = false
-
-  while (hasMore) {
-    try {
-      // Use deduplication untuk prevent multiple concurrent requests ke page yang sama
-      const cacheKey = `lulu_page_${page}`
-      const pageData = await cacheManager.deduplicatedRequest(cacheKey, async () => {
-        const response = await fetch(`${BASE_URL}?key=${API_KEY}&per_page=${perPage}&page=${page}`)
+// Get total pages first for parallel fetching
+async function getTotalPages(): Promise<number> {
+  const cacheKey = "lulu_total_pages"
+  return cacheManager.withFunctionCache(
+    cacheKey,
+    async () => {
+      try {
+        const response = await fetch(`${BASE_URL}?key=${API_KEY}&per_page=1&page=1`)
         const data = await response.json()
-        return data
-      })
+        return data.result?.pages || 1
+      } catch (error) {
+        console.error("Error getting total pages", error)
+        return 1
+      }
+    },
+    60 * 60 * 1000,
+  ) // Cache for 1 hour
+}
 
-      if (pageData.status === 200 && pageData.result?.files?.length) {
-        allItems = [...allItems, ...pageData.result.files.map(normalizeLuluItem)]
-        lastSuccessfulPage = page
-        hasPartialData = true
-        page++
-        hasMore = page <= (pageData.result.pages || 1)
-      } else {
-        hasMore = false
-      }
-    } catch (error) {
-      console.error("Error fetching page", page, error)
-      hasMore = false
-      
-      // Jika ada partial data, return yang sudah berhasil di-fetch
-      if (hasPartialData && allItems.length > 0) {
-        console.log(`[v0] Partial data recovered: ${allItems.length} items from ${lastSuccessfulPage} pages`)
-        break
-      }
+async function fetchAllLuluData(): Promise<VideoItem[]> {
+  try {
+    // Get total pages first
+    const totalPages = await getTotalPages()
+    const perPage = 1000
+
+    // Fetch pages in parallel - fetch all at once
+    const maxPages = Math.min(totalPages, 20) // Limit to 20 pages
+    const pagePromises: Promise<VideoItem[]>[] = []
+
+    for (let page = 1; page <= maxPages; page++) {
+      const pagePromise = (async () => {
+        try {
+          const cacheKey = `lulu_page_${page}`
+          const pageData = await cacheManager.deduplicatedRequest(cacheKey, async () => {
+            const controller = new AbortController()
+            const timeoutId = setTimeout(() => controller.abort(), 15000)
+
+            try {
+              const response = await fetch(
+                `${BASE_URL}?key=${API_KEY}&per_page=${perPage}&page=${page}`,
+                { signal: controller.signal },
+              )
+              const data = await response.json()
+              clearTimeout(timeoutId)
+              return data
+            } finally {
+              clearTimeout(timeoutId)
+            }
+          })
+
+          if (pageData.status === 200 && pageData.result?.files?.length) {
+            return pageData.result.files.map(normalizeLuluItem)
+          }
+          return []
+        } catch (error) {
+          console.error(`Error fetching page ${page}:`, error)
+          return []
+        }
+      })()
+
+      pagePromises.push(pagePromise)
     }
-  }
 
-  return allItems
+    // Wait for all pages in parallel
+    const allPages = await Promise.all(pagePromises)
+    const allItems = allPages.flat()
+
+    console.log(`[v0] Fetched ${allItems.length} items from ${maxPages} pages in parallel`)
+    return allItems
+  } catch (error) {
+    console.error("Error in fetchAllLuluData", error)
+    return []
+  }
 }
 
 // DoodAPI List function

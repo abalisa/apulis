@@ -9,6 +9,9 @@ export const runtime = "edge"
 
 export const revalidate = CACHE_TTL.SEARCH_RESULTS // 2 hours for search results
 
+// Limit per_page for better performance on search
+const SAFE_PER_PAGE = 100
+
 export async function GET(request: Request) {
   if (!validateUrl(request.url)) {
     const errorResponse = NextResponse.json({ error: "Invalid request" }, { status: 400 })
@@ -19,7 +22,7 @@ export async function GET(request: Request) {
   const query = searchParams.get("q")
   // Set default page and per_page values if they are not provided
   const page = searchParams.get("page") || "1"
-  const perPage = searchParams.get("per_page") || "200"
+  const perPage = Math.min(Math.max(1, parseInt(searchParams.get("per_page") || "50")), SAFE_PER_PAGE)
 
   const queryValidation = validateSearchQuery(query || "")
   if (!queryValidation.isValid) {
@@ -27,7 +30,7 @@ export async function GET(request: Request) {
     return setCorsHeaders(errorResponse)
   }
 
-  const paginationValidation = validatePagination(page, perPage)
+  const paginationValidation = validatePagination(page, perPage.toString())
   if (!paginationValidation.isValid) {
     const errorResponse = NextResponse.json({ error: paginationValidation.error }, { status: 400 })
     return setCorsHeaders(errorResponse)

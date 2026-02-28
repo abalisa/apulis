@@ -9,12 +9,15 @@ export const runtime = "edge"
 
 export const revalidate = CACHE_TTL.RANDOM // 1 hour for random data to ensure variety
 
+// Limit per_page for better performance
+const SAFE_PER_PAGE = 100
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
-  const page = searchParams.get("page")
-  const perPage = searchParams.get("per_page")
+  const page = searchParams.get("page") || "1"
+  const perPage = Math.min(Math.max(1, parseInt(searchParams.get("per_page") || "20")), SAFE_PER_PAGE)
 
-  const validation = validatePagination(page, perPage)
+  const validation = validatePagination(page, perPage.toString())
   if (!validation.isValid) {
     const errorResponse = NextResponse.json({ error: validation.error }, { status: 400 })
     return setCorsHeaders(errorResponse)
@@ -30,13 +33,14 @@ export async function GET(request: Request) {
       return setCorsHeaders(notFoundResponse)
     }
 
-    const hourSeed = Math.floor(Date.now() / (1000 * 60 * 60)) // Changes every hour
+    // Seed-based shuffling tied to hour for consistency
+    const hourSeed = Math.floor(Date.now() / (1000 * 60 * 60))
     const seededRandom = (seed: number) => {
       const x = Math.sin(seed) * 10000
       return x - Math.floor(x)
     }
 
-    // Mengacak data menggunakan algoritma Fisher-Yates shuffle dengan seed
+    // Fisher-Yates shuffle with seed for consistent randomization
     const shuffledData = [...data]
     for (let i = shuffledData.length - 1; i > 0; i--) {
       const j = Math.floor(seededRandom(hourSeed + i) * (i + 1))
@@ -54,7 +58,7 @@ export async function GET(request: Request) {
 
     const response = NextResponse.json({
       result: {
-        total_pages: data.length,
+        total_pages: Math.ceil(data.length / perPageNum),
         results_total: data.length.toString(),
         results: paginatedFiles.length,
         files: paginatedFiles.map((file) => ({
@@ -74,7 +78,7 @@ export async function GET(request: Request) {
       },
       status: 200,
       msg: "OK",
-      server_time: new Date().toISOString().replace("T", " ").substr(0, 19),
+      server_time: new Date().toISOString().replace("T", " ").substring(0, 19),
     })
 
     const cacheHeaders = getVercelCacheHeaders(CACHE_TTL.RANDOM)
@@ -84,6 +88,7 @@ export async function GET(request: Request) {
 
     return setCorsHeaders(response)
   } catch (error) {
+    console.error("Random endpoint error:", error)
     const errorResponse = NextResponse.json({ error: "Failed to fetch data" }, { status: 500 })
     return setCorsHeaders(errorResponse)
   }
