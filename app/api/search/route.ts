@@ -3,11 +3,11 @@ import { fetchDataWithCache, fetchDoodApiResults, calculateRelevance } from "@/a
 import { setCorsHeaders } from "@/app/lib/cors"
 import { processTitle } from "@/app/lib/titleProcessor"
 import { validateSearchQuery, validatePagination, validateUrl } from "@/app/lib/validation"
-import { getVercelCacheHeaders } from "@/app/lib/cacheManager"
+import { getVercelCacheHeaders, CACHE_TTL } from "@/app/lib/cacheManager"
 
 export const runtime = "edge"
 
-export const revalidate = 7200 // 2 hours (2 * 60 * 60) for search results
+export const revalidate = CACHE_TTL.SEARCH_RESULTS // 2 hours for search results
 
 export async function GET(request: Request) {
   if (!validateUrl(request.url)) {
@@ -65,8 +65,8 @@ export async function GET(request: Request) {
         seenFileCodes.set(file.file_code, "lulustream")
         return true
       })
-      .map((file: any) => {
-        const relevanceScore = calculateRelevance(file.title, keywords, sanitizedQuery)
+      .map(async (file: any) => {
+        const relevanceScore = await calculateRelevance(file.title, keywords, sanitizedQuery)
 
         return {
           single_img: file.single_img,
@@ -90,8 +90,8 @@ export async function GET(request: Request) {
         seenFileCodes.set(file.file_code, file.api_source)
         return true
       })
-      .map((file: any) => {
-        const relevanceScore = calculateRelevance(file.title, keywords, sanitizedQuery)
+      .map(async (file: any) => {
+        const relevanceScore = await calculateRelevance(file.title, keywords, sanitizedQuery)
 
         return {
           single_img: file.single_img,
@@ -107,7 +107,11 @@ export async function GET(request: Request) {
         }
       })
 
-    const allResults = [...luluStreamResults, ...doodStreamResults]
+    // Resolve all async calculations in parallel
+    const resolvedLuluResults = await Promise.all(luluStreamResults)
+    const resolvedDoodResults = await Promise.all(doodStreamResults)
+
+    const allResults = [...resolvedLuluResults, ...resolvedDoodResults]
       .reduce((acc: any[], current: any) => {
         const isDuplicate = acc.some((item) => item.file_code === current.file_code)
         if (!isDuplicate) {
@@ -160,7 +164,7 @@ export async function GET(request: Request) {
 
     const response = NextResponse.json(result)
 
-    const cacheHeaders = getVercelCacheHeaders(7200) // 2 hours for search results
+    const cacheHeaders = getVercelCacheHeaders(CACHE_TTL.SEARCH_RESULTS)
     Object.entries(cacheHeaders).forEach(([key, value]) => {
       response.headers.set(key, value)
     })

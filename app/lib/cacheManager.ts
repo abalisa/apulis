@@ -12,19 +12,32 @@ interface CacheStats {
   edgeCacheHits: number
   apiCalls: number
   totalRequests: number
+  functionCacheHits: number
+  requestDedupHits: number
+}
+
+interface PendingRequest<T> {
+  promise: Promise<T>
+  timestamp: number
 }
 
 class VercelExtremeCacheManager {
   private memoryCache = new Map<string, CacheEntry<any>>()
+  private functionCache = new Map<string, CacheEntry<any>>() // Cache untuk function results
+  private pendingRequests = new Map<string, PendingRequest<any>>() // Deduplication layer
   private readonly DEFAULT_TTL = 7 * 24 * 60 * 60 * 1000 // 7 days
+  private readonly FUNCTION_TTL = 60 * 60 * 1000 // 1 hour for function results
   private readonly EDGE_CACHE_TTL = 24 * 60 * 60 // 24 hours for edge cache
   private readonly STALE_WHILE_REVALIDATE = 30 * 24 * 60 * 60 // 30 days stale-while-revalidate
+  private readonly REQUEST_DEDUP_TIMEOUT = 5 * 60 * 1000 // 5 minutes for request dedup
   private stats: CacheStats = {
     memoryHits: 0,
     localStorageHits: 0,
     edgeCacheHits: 0,
     apiCalls: 0,
     totalRequests: 0,
+    functionCacheHits: 0,
+    requestDedupHits: 0,
   }
 
   // Vercel Edge Cache headers for maximum caching
@@ -59,8 +72,10 @@ class VercelExtremeCacheManager {
   setMemory<T>(key: string, data: T, ttl: number = this.DEFAULT_TTL): void {
     // Implement LRU eviction if cache gets too large
     if (this.memoryCache.size > 1000) {
-      const oldestKey = this.memoryCache.keys().next().value
-      this.memoryCache.delete(oldestKey)
+      const oldestKey = this.memoryCache.keys().next().value as string | undefined
+      if (oldestKey) {
+        this.memoryCache.delete(oldestKey)
+      }
     }
 
     const entry: CacheEntry<T> = {
@@ -86,6 +101,83 @@ class VercelExtremeCacheManager {
     this.memoryCache.delete(key)
     this.memoryCache.set(key, entry)
     return entry.data
+  }
+
+  // Function Result Cache dengan TTL pendek
+  async withFunctionCache<T>(
+    key: string,
+    fn: () => Promise<T> | T,
+    ttl: number = this.FUNCTION_TTL,
+  ): Promise<T> {
+    // Check cache dulu
+    const cached = this.functionCache.get(key)
+    if (cached && Date.now() < cached.expiry) {
+      this.stats.functionCacheHits++
+      return cached.data
+    }
+
+    // Jika ada pending request untuk key yang sama, return promise-nya (deduplication)
+    if (this.pendingRequests.has(key)) {
+      const pending = this.pendingRequests.get(key)!
+      if (Date.now() - pending.timestamp < this.REQUEST_DEDUP_TIMEOUT) {
+        this.stats.requestDedupHits++
+        return pending.promise
+      }
+    }
+
+    // Create instance untuk fn
+    const resultPromise = (async () => {
+      try {
+        const result = await Promise.resolve(fn())
+        
+        // Cache result
+        this.functionCache.set(key, {
+          data: result,
+          timestamp: Date.now(),
+          expiry: Date.now() + ttl,
+        })
+
+        // Cleanup pending requests
+        this.pendingRequests.delete(key)
+
+        return result
+      } catch (error) {
+        // Cleanup pending requests on error
+        this.pendingRequests.delete(key)
+        throw error
+      }
+    })()
+
+    // Store pending request untuk deduplication
+    this.pendingRequests.set(key, {
+      promise: resultPromise,
+      timestamp: Date.now(),
+    })
+
+    return resultPromise
+  }
+
+  // Request Deduplication untuk concurrent requests
+  async deduplicatedRequest<T>(key: string, fetchFn: () => Promise<T>): Promise<T> {
+    if (this.pendingRequests.has(key)) {
+      const pending = this.pendingRequests.get(key)!
+      if (Date.now() - pending.timestamp < this.REQUEST_DEDUP_TIMEOUT) {
+        this.stats.requestDedupHits++
+        return pending.promise
+      }
+    }
+
+    const promise = fetchFn()
+    this.pendingRequests.set(key, { promise, timestamp: Date.now() })
+
+    try {
+      const result = await promise
+      this.pendingRequests.delete(key)
+      return result
+    } catch (error) {
+      this.pendingRequests.delete(key)
+      throw error
+    }
   }
 
   // Enhanced localStorage with compression
@@ -326,6 +418,7 @@ class VercelExtremeCacheManager {
   // Get comprehensive cache statistics
   getStats(): CacheStats & {
     memorySize: number
+    functionCacheSize: number
     localStorageSize: number
     hitRate: number
     efficiency: number
@@ -341,13 +434,14 @@ class VercelExtremeCacheManager {
       })
     }
 
-    const totalHits = this.stats.memoryHits + this.stats.localStorageHits + this.stats.edgeCacheHits
+    const totalHits = this.stats.memoryHits + this.stats.localStorageHits + this.stats.edgeCacheHits + this.stats.functionCacheHits + this.stats.requestDedupHits
     const hitRate = this.stats.totalRequests > 0 ? (totalHits / this.stats.totalRequests) * 100 : 0
     const efficiency = this.stats.apiCalls > 0 ? totalHits / this.stats.apiCalls : 0
 
     return {
       ...this.stats,
       memorySize: this.memoryCache.size,
+      functionCacheSize: this.functionCache.size,
       localStorageSize,
       hitRate,
       efficiency,
@@ -357,6 +451,8 @@ class VercelExtremeCacheManager {
   // Clear all caches
   clearAll(): void {
     this.memoryCache.clear()
+    this.functionCache.clear()
+    this.pendingRequests.clear()
     if (typeof window !== "undefined" && window.localStorage) {
       const keys = Object.keys(localStorage)
       keys.forEach((key) => {
@@ -373,6 +469,8 @@ class VercelExtremeCacheManager {
       edgeCacheHits: 0,
       apiCalls: 0,
       totalRequests: 0,
+      functionCacheHits: 0,
+      requestDedupHits: 0,
     }
   }
 }
@@ -381,3 +479,32 @@ export const cacheManager = new VercelExtremeCacheManager()
 
 // Export cache headers helper for API routes
 export const getVercelCacheHeaders = (maxAge?: number) => cacheManager.getVercelCacheHeaders(maxAge)
+
+// Optimized TTL values untuk berbagai tipe endpoint
+export const CACHE_TTL = {
+  // Long-lived cache untuk data yang jarang berubah
+  FILE_INFO: 30 * 24 * 60 * 60, // 30 days
+  FULL_LIST: 7 * 24 * 60 * 60, // 7 days
+  SEARCH_RESULTS: 2 * 60 * 60, // 2 hours
+  RANDOM: 1 * 60 * 60, // 1 hour
+  DOOD_LIST: 6 * 60 * 60, // 6 hours
+  DOOD_SEARCH: 2 * 60 * 60, // 2 hours
+  DOOD_INFO: 24 * 60 * 60, // 24 hours
+  FUNCTION_RESULTS: 30 * 60, // 30 minutes
+}
+
+// Helper untuk normalize query parameters (improve cache hits)
+export function normalizeQueryParams(
+  params: Record<string, any>,
+): string {
+  const sorted = Object.keys(params)
+    .sort()
+    .reduce(
+      (acc, key) => {
+        acc[key] = params[key]
+        return acc
+      },
+      {} as Record<string, any>,
+    )
+  return JSON.stringify(sorted)
+}

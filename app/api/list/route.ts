@@ -3,11 +3,11 @@ import { fetchDataWithCache, fetchDoodApiList } from "@/app/lib/fetchData"
 import { setCorsHeaders } from "@/app/lib/cors"
 import { processTitle } from "@/app/lib/titleProcessor"
 import { validatePagination } from "@/app/lib/validation"
-import { getVercelCacheHeaders } from "@/app/lib/cacheManager"
+import { getVercelCacheHeaders, CACHE_TTL } from "@/app/lib/cacheManager"
 
 export const runtime = "edge"
 
-export const revalidate = 86400 // 24 hours (reduced from 7 days for better freshness)
+export const revalidate = CACHE_TTL.FULL_LIST // Use optimized TTL
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -97,7 +97,7 @@ export async function GET(request: Request) {
 
     const response = NextResponse.json(result)
 
-    const cacheHeaders = getVercelCacheHeaders(86400) // 24 hours
+    const cacheHeaders = getVercelCacheHeaders(CACHE_TTL.FULL_LIST)
     Object.entries(cacheHeaders).forEach(([key, value]) => {
       response.headers.set(key, value)
     })

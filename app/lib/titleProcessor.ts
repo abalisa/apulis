@@ -5,9 +5,16 @@ const randomWords = [
     "Drbokep Asia",
   "Bokepin",
     "bokepx18",
+             "Sotwe", "Bokep Dood", "Twitter", "Bokepsatset", "Simontok", "Doodstream",
+            "Simintok", "Xpanas", "Pekoblive", "Terabox", "Streaming", "Tiktok",
+            "Doods Pro", "Lulustream", "Doodsflix", "Yakwad", "Doodflix", "Doodstreem",
+            "Dood Pro", "Doostream", "Dodstream", "VideoLokal",
+            "Bokep Video", "Video Viral", "Bokep Terbaru", "Video Bokep", "Bokepsin",
+            "Bokepind", "Bokep31", "Video Indo", "Video Panas", "Asupan Viral",
+            "Lagi Viral", "Video Viral",
+
   "Doodflix",
   "Tiktok",
-  "Lagi Viral",
   "Bokepsatset",
   "Doodstream",
   "Dood Tele",
@@ -66,8 +73,8 @@ const randomWords = [
   "Folder",
     "Telegram",
   "Live Bokep",
-  "Tele",
-  "Links",
+  "Links Tele",
+
     "xHamster",
     "bokephot",
       "Indo18",
@@ -79,7 +86,7 @@ const randomWords = [
   "Stw Tobrut",
   "Doodstreem",
   "Jilbab",
-  "Sesuai Gambar",
+  "Terabox",
   "Bokep Terbaru",
   "Skandal",
   "Viral Mesum",
@@ -88,7 +95,7 @@ const randomWords = [
   "Pemersatu Bangsa",
   "Pejuang Lendir",
   "Popstream",
-  "Staklam",
+  "Simontok",
   "Bokepind",
   "Video Bokep",
   "Video Indo",
@@ -96,8 +103,11 @@ const randomWords = [
 ]
 
 function cleanTitle(title: string): string {
+  // Pisahkan PascalCase dengan menambahkan spasi sebelum huruf kapital
+  let cleanedTitle = title.replace(/([a-z])([A-Z])/g, "$1 $2")
+
   // Hapus semua angka
-  let cleanedTitle = title.replace(/[0-9]+/g, "")
+  cleanedTitle = cleanedTitle.replace(/[0-9]+/g, "")
 
   // Ganti semua karakter non-alfabet (selain spasi) dengan spasi tunggal
   cleanedTitle = cleanedTitle.replace(/[^a-zA-Z\s]+/g, " ")

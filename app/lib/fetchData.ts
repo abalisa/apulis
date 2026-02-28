@@ -30,7 +30,7 @@ const DOOD_API_KEY = "112623ifbcbltzajwjrpjx"
 const DOOD_BASE_URL = "https://doodapi.com/api"
 const DOOD_SEARCH_URL = "https://doodapi.com/api"
 
-import { cacheManager } from "./cacheManager"
+import { cacheManager, CACHE_TTL } from "./cacheManager"
 
 function saveToLocalStorage(data: VideoItem[]): void {
   try {
@@ -103,7 +103,7 @@ const normalizeLuluItem = (item: any): VideoItem => {
     .replace(/[^a-zA-Z0-9\s]/g, "")
     .split(/\s+/)
     .filter(Boolean)
-  const titleTags = [...new Set(titleWords)].slice(0, 15)
+  const titleTags = Array.from([...new Set(titleWords)].slice(0, 15)) as string[]
   const description = generateDescription(cleanedTitle, titleTags)
 
   return {
@@ -132,22 +132,37 @@ async function fetchAllLuluData(): Promise<VideoItem[]> {
   let page = 1
   const perPage = 1000 // Sesuaikan dengan batas maksimal API
   let hasMore = true
+  let lastSuccessfulPage = 0
+  let hasPartialData = false
 
   while (hasMore) {
     try {
-      const response = await fetch(`${BASE_URL}?key=${API_KEY}&per_page=${perPage}&page=${page}`)
-      const data = await response.json()
+      // Use deduplication untuk prevent multiple concurrent requests ke page yang sama
+      const cacheKey = `lulu_page_${page}`
+      const pageData = await cacheManager.deduplicatedRequest(cacheKey, async () => {
+        const response = await fetch(`${BASE_URL}?key=${API_KEY}&per_page=${perPage}&page=${page}`)
+        const data = await response.json()
+        return data
+      })
 
-      if (data.status === 200 && data.result?.files?.length) {
-        allItems = [...allItems, ...data.result.files.map(normalizeLuluItem)]
+      if (pageData.status === 200 && pageData.result?.files?.length) {
+        allItems = [...allItems, ...pageData.result.files.map(normalizeLuluItem)]
+        lastSuccessfulPage = page
+        hasPartialData = true
         page++
-        hasMore = page <= (data.result.pages || 1)
+        hasMore = page <= (pageData.result.pages || 1)
       } else {
         hasMore = false
       }
     } catch (error) {
       console.error("Error fetching page", page, error)
       hasMore = false
+      
+      // Jika ada partial data, return yang sudah berhasil di-fetch
+      if (hasPartialData && allItems.length > 0) {
+        console.log(`[v0] Partial data recovered: ${allItems.length} items from ${lastSuccessfulPage} pages`)
+        break
+      }
     }
   }
 
@@ -176,7 +191,7 @@ export async function fetchDoodApiList(page: number, perPage: number) {
     },
     null,
     {
-      maxAge: 6 * 60 * 60 * 1000, // 6 hours for DoodAPI
+      maxAge: CACHE_TTL.DOOD_LIST * 1000,
       staleWhileRevalidate: true,
     },
   )
@@ -205,10 +220,14 @@ export async function fetchDoodApiResults(searchTerm: string): Promise<any[]> {
         const url = `${DOOD_SEARCH_URL}/search/videos?key=${DOOD_API_KEY}&search_term=${encodeURIComponent(keyword)}`
 
         try {
-          const response = await fetch(url, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            },
+          // Use deduplication untuk concurrent requests
+          const cacheKey = `dood_search_${keyword}`
+          const response = await cacheManager.deduplicatedRequest(cacheKey, async () => {
+            return fetch(url, {
+              headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+              },
+            })
           })
 
           if (!response.ok) {
@@ -263,7 +282,7 @@ export async function fetchDoodApiResults(searchTerm: string): Promise<any[]> {
     },
     [],
     {
-      maxAge: 2 * 60 * 60 * 1000, // 2 hours for search results
+      maxAge: CACHE_TTL.DOOD_SEARCH * 1000,
       staleWhileRevalidate: true,
     },
   )
@@ -291,7 +310,7 @@ export async function fetchDoodApiInfo(fileCode: string) {
     },
     null,
     {
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours for file info
+      maxAge: CACHE_TTL.DOOD_INFO * 1000,
       staleWhileRevalidate: true,
     },
   )
@@ -314,7 +333,7 @@ export async function fetchDataWithCache(): Promise<VideoItem[]> {
     },
     [], // Empty array as fallback
     {
-      maxAge: CACHE_DURATION,
+      maxAge: CACHE_TTL.FULL_LIST * 1000,
       staleWhileRevalidate: true,
     },
   )
@@ -344,96 +363,105 @@ export function getCacheStatus(): { hasMemoryCache: boolean; hasLocalStorageCach
 }
 
 // Utility functions for search relevance and fuzzy matching
-export function calculateRelevance(title: string, keywords: string[], originalQuery: string): number {
-  const titleLower = title.toLowerCase()
-  const queryLower = originalQuery.toLowerCase()
-  let score = 0
+export async function calculateRelevance(
+  title: string,
+  keywords: string[],
+  originalQuery: string,
+): Promise<number> {
+  // Cache key berdasarkan normalized inputs
+  const cacheKey = `relevance_${Buffer.from(`${title}|${keywords.join(",")}|${originalQuery}`).toString("base64")}`
 
-  // Count how many keywords are found in the title
-  const matchedKeywords = keywords.filter((keyword) => {
-    if (keyword.length < 2) return false
-    const wordBoundaryRegex = new RegExp(`\\b${keyword}\\b`, "i")
-    return wordBoundaryRegex.test(title) || titleLower.includes(keyword)
-  })
+  return cacheManager.withFunctionCache(cacheKey, async () => {
+    const titleLower = title.toLowerCase()
+    const queryLower = originalQuery.toLowerCase()
+    let score = 0
 
-  const keywordMatchRatio = matchedKeywords.length / keywords.length
-
-  // Massive bonus for having ALL keywords (prioritize complete matches)
-  if (keywordMatchRatio === 1.0) {
-    score += 1000 // Very high score for complete keyword matches
-  } else if (keywordMatchRatio >= 0.8) {
-    score += 500 // High score for most keywords
-  } else if (keywordMatchRatio >= 0.6) {
-    score += 250 // Medium score for many keywords
-  } else if (keywordMatchRatio >= 0.4) {
-    score += 100 // Lower score for some keywords
-  }
-
-  // Exact phrase match gets additional high score
-  if (titleLower.includes(queryLower)) {
-    score += 200
-  }
-
-  // Position-based scoring - matches at the beginning are more relevant
-  const queryIndex = titleLower.indexOf(queryLower)
-  if (queryIndex === 0) {
-    score += 100 // Starts with query
-  } else if (queryIndex > 0) {
-    score += 50 // Contains query somewhere
-  }
-
-  // Individual keyword scoring with position bonus
-  keywords.forEach((keyword, index) => {
-    if (keyword.length < 2) return
-
-    const keywordIndex = titleLower.indexOf(keyword)
-    if (keywordIndex !== -1) {
-      // Exact word boundary match
+    // Count how many keywords are found in the title
+    const matchedKeywords = keywords.filter((keyword) => {
+      if (keyword.length < 2) return false
       const wordBoundaryRegex = new RegExp(`\\b${keyword}\\b`, "i")
-      if (wordBoundaryRegex.test(title)) {
-        score += 30 + (keywords.length - index) * 5 // Earlier keywords get more weight
-      } else {
-        score += 15 + (keywords.length - index) * 2 // Partial match with position weight
-      }
+      return wordBoundaryRegex.test(title) || titleLower.includes(keyword)
+    })
 
-      // Bonus for keyword at the beginning
-      if (keywordIndex === 0) {
-        score += 25
-      }
+    const keywordMatchRatio = matchedKeywords.length / keywords.length
 
-      // Bonus for consecutive keywords
-      if (index > 0) {
-        const prevKeyword = keywords[index - 1]
-        const prevIndex = titleLower.indexOf(prevKeyword)
-        if (prevIndex !== -1 && Math.abs(keywordIndex - prevIndex - prevKeyword.length) <= 3) {
-          score += 20 // Bonus for keywords appearing close together
+    // Massive bonus for having ALL keywords (prioritize complete matches)
+    if (keywordMatchRatio === 1.0) {
+      score += 1000 // Very high score for complete keyword matches
+    } else if (keywordMatchRatio >= 0.8) {
+      score += 500 // High score for most keywords
+    } else if (keywordMatchRatio >= 0.6) {
+      score += 250 // Medium score for many keywords
+    } else if (keywordMatchRatio >= 0.4) {
+      score += 100 // Lower score for some keywords
+    }
+
+    // Exact phrase match gets additional high score
+    if (titleLower.includes(queryLower)) {
+      score += 200
+    }
+
+    // Position-based scoring - matches at the beginning are more relevant
+    const queryIndex = titleLower.indexOf(queryLower)
+    if (queryIndex === 0) {
+      score += 100 // Starts with query
+    } else if (queryIndex > 0) {
+      score += 50 // Contains query somewhere
+    }
+
+    // Individual keyword scoring with position bonus
+    keywords.forEach((keyword, index) => {
+      if (keyword.length < 2) return
+
+      const keywordIndex = titleLower.indexOf(keyword)
+      if (keywordIndex !== -1) {
+        // Exact word boundary match
+        const wordBoundaryRegex = new RegExp(`\\b${keyword}\\b`, "i")
+        if (wordBoundaryRegex.test(title)) {
+          score += 30 + (keywords.length - index) * 5 // Earlier keywords get more weight
+        } else {
+          score += 15 + (keywords.length - index) * 2 // Partial match with position weight
+        }
+
+        // Bonus for keyword at the beginning
+        if (keywordIndex === 0) {
+          score += 25
+        }
+
+        // Bonus for consecutive keywords
+        if (index > 0) {
+          const prevKeyword = keywords[index - 1]
+          const prevIndex = titleLower.indexOf(prevKeyword)
+          if (prevIndex !== -1 && Math.abs(keywordIndex - prevIndex - prevKeyword.length) <= 3) {
+            score += 20 // Bonus for keywords appearing close together
+          }
         }
       }
+    })
+
+    // Keyword density bonus
+    const totalKeywordLength = matchedKeywords.reduce((sum, keyword) => sum + keyword.length, 0)
+    const densityRatio = totalKeywordLength / title.length
+    if (densityRatio > 0.3) {
+      score += 30 // High keyword density
+    } else if (densityRatio > 0.2) {
+      score += 15 // Medium keyword density
     }
-  })
 
-  // Keyword density bonus
-  const totalKeywordLength = matchedKeywords.reduce((sum, keyword) => sum + keyword.length, 0)
-  const densityRatio = totalKeywordLength / title.length
-  if (densityRatio > 0.3) {
-    score += 30 // High keyword density
-  } else if (densityRatio > 0.2) {
-    score += 15 // Medium keyword density
-  }
+    // Length penalty for very long titles (they might be less relevant)
+    if (title.length > 150) {
+      score -= 10
+    } else if (title.length > 100) {
+      score -= 5
+    }
 
-  // Length penalty for very long titles (they might be less relevant)
-  if (title.length > 150) {
-    score -= 10
-  } else if (title.length > 100) {
-    score -= 5
-  }
+    // Bonus for shorter, more focused titles when they match well
+    if (title.length < 50 && keywordMatchRatio >= 0.5) {
+      score += 20
+    }
 
-  // Bonus for shorter, more focused titles when they match well
-  if (title.length < 50 && keywordMatchRatio >= 0.5) {
-    score += 20
-  }
-
-  return Math.max(0, score) // Ensure non-negative score
+    return Math.max(0, score) // Ensure non-negative score
+  }, CACHE_TTL.FUNCTION_RESULTS * 1000) // Cache for optimized TTL
 }
 
 export function fuzzyMatch(text: string, pattern: string): boolean {

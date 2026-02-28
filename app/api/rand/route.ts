@@ -3,11 +3,11 @@ import { fetchDataWithCache } from "@/app/lib/fetchData"
 import { setCorsHeaders } from "@/app/lib/cors"
 import { processTitle } from "@/app/lib/titleProcessor"
 import { validatePagination } from "@/app/lib/validation"
-import { getVercelCacheHeaders } from "@/app/lib/cacheManager"
+import { getVercelCacheHeaders, CACHE_TTL } from "@/app/lib/cacheManager"
 
 export const runtime = "edge"
 
-export const revalidate = 3600 // 1 hour for random data to ensure variety
+export const revalidate = CACHE_TTL.RANDOM // 1 hour for random data to ensure variety
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -64,7 +64,7 @@ export async function GET(request: Request) {
           uploaded: file.uploaded,
           views: file.views.toString(),
           length: file.length.toString(),
-          download_url: file.download_url,
+          download_url: file.protected_dl,
           file_code: file.file_code,
           title: processTitle(file.title),
           fld_id: "0",
@@ -77,7 +77,7 @@ export async function GET(request: Request) {
       server_time: new Date().toISOString().replace("T", " ").substr(0, 19),
     })
 
-    const cacheHeaders = getVercelCacheHeaders(3600) // 1 hour for random data
+    const cacheHeaders = getVercelCacheHeaders(CACHE_TTL.RANDOM)
     Object.entries(cacheHeaders).forEach(([key, value]) => {
       response.headers.set(key, value)
     })

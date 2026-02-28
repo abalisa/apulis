@@ -3,11 +3,11 @@ import { fetchDataWithCache, fetchDoodApiInfo } from "@/app/lib/fetchData"
 import { setCorsHeaders } from "@/app/lib/cors"
 import { processTitle } from "@/app/lib/titleProcessor"
 import { validateFileCode } from "@/app/lib/validation"
-import { getVercelCacheHeaders } from "@/app/lib/cacheManager"
+import { getVercelCacheHeaders, CACHE_TTL } from "@/app/lib/cacheManager"
 
 export const runtime = "edge"
 
-export const revalidate = 2592000 // 30 days (30 * 24 * 60 * 60) for file info
+export const revalidate = CACHE_TTL.FILE_INFO // 30 days for file info
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -60,7 +60,7 @@ export async function GET(request: Request) {
       }
       const response = NextResponse.json(result)
 
-      const cacheHeaders = getVercelCacheHeaders(2592000) // 30 days for file info
+      const cacheHeaders = getVercelCacheHeaders(CACHE_TTL.FILE_INFO)
       Object.entries(cacheHeaders).forEach(([key, value]) => {
         response.headers.set(key, value)
       })
@@ -94,7 +94,7 @@ export async function GET(request: Request) {
 
     const response = NextResponse.json(result)
 
-    const cacheHeaders = getVercelCacheHeaders(2592000) // 30 days for file info
+    const cacheHeaders = getVercelCacheHeaders(CACHE_TTL.FILE_INFO)
     Object.entries(cacheHeaders).forEach(([key, value]) => {
       response.headers.set(key, value)
     })
