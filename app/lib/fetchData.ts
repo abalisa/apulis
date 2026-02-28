@@ -69,23 +69,96 @@ const parseDuration = (duration: any): number => {
   if (typeof duration === "number") return duration
 
   if (typeof duration === "string") {
-    // Format HH:MM:SS atau MM:SS
+    // Handle empty string
+    if (!duration.trim()) return 0
+
+    // Handle format like "01:23:45" or "23:45"
     const parts = duration.split(":").reverse()
-    return parts.reduce((total, val, idx) => {
-      return total + (Number.parseInt(val) || 0) * Math.pow(60, idx)
-    }, 0)
+    let seconds = 0
+    for (let i = 0; i < parts.length; i++) {
+      seconds += (parseInt(parts[i]) || 0) * Math.pow(60, i)
+    }
+    return seconds
   }
 
   return 0
 }
 
-const formatBytes = (bytes: number, decimals = 2): string => {
-  if (bytes === 0) return "0 Bytes"
-  const k = 1024
-  const sizes = ["Bytes", "KB", "MB", "GB", "TB"]
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + " " + sizes[i]
+/**
+ * Parse size string with units (e.g., "608.00 MB", "1.5 GB") to bytes
+ */
+const parseSizeToBytes = (sizeValue: any): number => {
+  // If already number, return as is
+  if (typeof sizeValue === "number") return sizeValue
+
+  if (typeof sizeValue === "string") {
+    // Remove spaces and convert to uppercase
+    const sizeStr = sizeValue.trim().toUpperCase()
+
+    // Extract number and unit
+    const match = sizeStr.match(/^([0-9.]+)\s*(BYTES|KB|MB|GB|TB)?$/)
+    if (match) {
+      const number = parseFloat(match[1])
+      const unit = match[2] || "BYTES"
+
+      // Convert to bytes
+      const multipliers: Record<string, number> = {
+        BYTES: 1,
+        KB: 1024,
+        MB: 1024 * 1024,
+        GB: 1024 * 1024 * 1024,
+        TB: 1024 * 1024 * 1024 * 1024,
+      }
+
+      return Math.round(number * (multipliers[unit] || 1))
+    }
+  }
+
+  return 0
 }
+
+/**
+ * Format bytes to human readable string (B/KB/MB/GB)
+ */
+const formatBytesSize = (bytes: number, decimals = 2): string => {
+  if (bytes === 0) return "0 B"
+
+  const units = ["B", "KB", "MB", "GB", "TB"]
+  let index = 0
+  let size = bytes
+
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index++
+  }
+
+  return `${size.toFixed(decimals)} ${units[index]}`
+}
+
+/**
+ * Format duration seconds to HH:MM:SS
+ */
+const formatDurationTime = (seconds: number): string => {
+  if (seconds <= 0) return "00:00:00"
+
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = Math.floor(seconds % 60)
+
+  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+}
+
+/**
+ * Estimate size based on duration (if size not available)
+ * Assuming average bitrate of 1 MB per second for estimation
+ */
+const estimateSizeFromDuration = (durationSeconds: number): number => {
+  // Rough estimate: 1 MB per second as fallback
+  const estimatedMB = durationSeconds * 1
+  return estimatedMB * 1024 * 1024 // Convert MB to bytes
+}
+
+
 
 const cleanTitle = (title: string): string => {
   return title.replace(/[^\w\s-]/g, "").trim()
@@ -97,7 +170,19 @@ const generateDescription = (title: string, tags: string[]): string => {
 
 const normalizeLuluItem = (item: any): VideoItem => {
   const filecode = item.file_code || item.filecode || ""
-  const duration = parseDuration(item.file_length || item.length || 0)
+  
+  // Parse duration and size properly
+  const rawDuration = item.file_length || item.length || 0
+  const durationSeconds = parseDuration(rawDuration)
+  
+  const rawSize = item.size || item.file_size || ""
+  const sizeBytes = parseSizeToBytes(rawSize)
+  
+  // Use estimated size if not available
+  const finalSizeBytes = sizeBytes || estimateSizeFromDuration(durationSeconds)
+  const formattedSize = formatBytesSize(finalSizeBytes)
+  const formattedDuration = formatDurationTime(durationSeconds)
+  
   const rawTitle = item.title || item.file_title || ""
   const cleanedTitle = cleanTitle(rawTitle)
   const titleWords = rawTitle
@@ -109,8 +194,8 @@ const normalizeLuluItem = (item: any): VideoItem => {
 
   return {
     protected_embed: item.protected_embed || `https://luvluv.pages.dev/${filecode}`,
-    size: item.length || "",
-    length: item.length || "",
+    size: formattedSize,
+    length: formattedDuration,
     protected_dl: item.download_url || `https://lulustream.com/d/${filecode}`,
     views: item.views || item.file_views || 0,
     single_img: item.player_img || `https://img.lulucdn.com/${filecode}_t.jpg`,
@@ -555,19 +640,13 @@ export function fuzzyMatch(text: string, pattern: string): boolean {
   return patternIndex >= patternLower.length * 0.8 // Allow 20% character misses
 }
 
-// Utility functions for formatting
+// Utility functions for formatting (exported for external use)
 export function formatFileSize(bytes: string | number): string {
   const size = typeof bytes === "string" ? Number.parseInt(bytes) : bytes
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`
-  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`
+  return formatBytesSize(size)
 }
 
 export function formatDuration(seconds: string | number): string {
   const totalSeconds = typeof seconds === "string" ? Number.parseInt(seconds) : seconds
-  const hours = Math.floor(totalSeconds / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  const secs = totalSeconds % 60
-  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+  return formatDurationTime(totalSeconds)
 }
